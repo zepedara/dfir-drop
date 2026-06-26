@@ -18,6 +18,7 @@ A single Docker container with a complete DFIR toolkit pre-installed and **100% 
 - [Investigation workflows](#workflows)
 - [⚠️ Handling malware safely](#safety)
 - [Troubleshooting](#troubleshooting)
+- [Artifact glossary](#glossary) · [Collecting evidence (KAPE/E01)](#collecting) · [Extending the image](#extending) · [Versions](#versions)
 - [What's bundled (inventory & sizes)](#inventory)
 
 ---
@@ -70,6 +71,16 @@ docker run -it --rm -v "$PWD":/data dfir-aio
 Inside the container type **`dfir`** for the menu. Done.
 
 Flags explained: `-it` interactive shell · `--rm` auto-clean the container on exit (your evidence/output on the host is untouched) · `-v "$PWD":/data` mounts the current host folder as `/data` inside.
+
+**Run a single tool without entering the shell** (handy for scripting/automation) — append the command after the image name:
+```bash
+docker run --rm -v "$PWD":/data dfir-aio:v2 PECmd -d /data --csv /data
+docker run --rm -v "$PWD":/data dfir-aio:v2 vol -f /data/mem.raw windows.pslist
+```
+**Fully air-gapped run** — prove no network is used: add `--network none`:
+```bash
+docker run --rm --network none -v "$PWD":/data dfir-aio:v2 capa-offline /data/sample.exe
+```
 
 ---
 
@@ -218,7 +229,9 @@ regripper -r /data/SOFTWARE -p runkeys              # one plugin
 
 ### `RECmd` — EZ registry engine with batch files
 ```bash
-RECmd --d /data --bn /opt/eztools/RECmd/BatchExamples/Kroll_Batch.reb --csv /data
+ls /opt/eztools/RECmd/BatchExamples/                                    # see available batch files
+RECmd --d /data --bn /opt/eztools/RECmd/BatchExamples/SoftwareASEPs.reb --csv /data   # persistence (ASEPs)
+RECmd -f /data/NTUSER.DAT --sa "RecentDocs"                             # one-off search across keys/values
 ```
 
 ### `regipy` — scriptable offline registry parsing (Python). `registry-diff`, `regipy-dump`.
@@ -294,6 +307,13 @@ exiftool -r -csv /data/images/ > /data/_meta.csv
 
 **Full disk image:** `mmls` → `fls`/`tsk_recover` (recover incl. deleted) → `bstrings`/`yara` on recovered files → mount/extract artifacts and run the Windows tools above.
 
+**Pivoting — connecting the dots across tools:** the goal is one coherent story. Take an IOC from any tool and chase it through the others:
+- A **SHA1** from `AmcacheParser` → `yara`/`capa` the binary, and grep it across other hosts' Amcache.
+- A **filename/path** from `chainsaw` → find it in `MFTECmd` (when it landed) and `PECmd` (when it ran).
+- A **process** from `vol windows.pstree` → its `cmdline`, its `netscan` connections, then `dumpfiles` and analyze.
+- A **C2 IP/domain** from `floss`/`netscan` → search the event logs (`chainsaw search`) and proxy/SRUM data.
+Build a timeline by merging the CSVs (sort by timestamp) — that's your incident narrative.
+
 ---
 
 <a name="safety"></a>
@@ -315,6 +335,44 @@ This container **analyzes** files; it does **not** sandbox **execution**. Do **n
 - **Large image won't `docker load`** → ensure all parts downloaded and reassembled (`sha256sum` the reassembled tar.gz against the release note).
 
 ---
+
+<a name="glossary"></a>
+## Artifact glossary (what these things actually are)
+- **Prefetch (`.pf`)** — Windows speeds up app launches by caching them; each file proves an executable **ran**, when, and how many times.
+- **Amcache.hve** — registry hive logging programs that have existed/run, **with SHA1 hashes** — great for IOC pivoting.
+- **ShimCache / AppCompatCache** — in the `SYSTEM` hive; the app-compatibility engine records executables the OS **saw** (path + last-modified), even if never run.
+- **`$MFT`** — NTFS Master File Table; one record per file with names, sizes, and timestamps — the backbone of a file-system timeline.
+- **USN Journal (`$J`)** — a rolling log of file **create/rename/delete** changes — shows what happened to files recently.
+- **ShellBags** — registry record of **folders a user opened** in Explorer (incl. on removable/deleted volumes).
+- **SRUM (`SRUDB.dat`)** — System Resource Usage Monitor; per-app **network bytes + runtime** for the last ~30 days — great for data-exfil sizing.
+- **Jump Lists / LNK** — recently-opened files per app, with the **source path/volume** (USBs, network shares).
+- **Event logs (`.evtx`)** — Windows' structured logs (logons, process creation, services, PowerShell…) — the primary attacker-activity source.
+
+<a name="collecting"></a>
+## Collecting the evidence this consumes
+- **Triage collection (recommended):** run **KAPE** (Kroll Artifact Parser/Extractor) with the `!SANS_Triage` target on the suspect host → it grabs event logs, `$MFT`, hives, Prefetch, etc. into one folder. Mount that folder as `/data` and go.
+- **`.E01` / `.AFF4` disk images:** the Sleuth Kit tools here expect **raw** images. Convert first on your host: `ewfexport image.E01` → `image.raw`, or mount the E01 and re-image to `.dd`. (Plain `.dd`/`.raw` images work directly.)
+- **Memory:** capture with WinPMEM/DumpIt/AVML → a raw physical memory image, then `vol -f /data/mem.raw windows.info`.
+
+<a name="extending"></a>
+## Extending / rebuilding the image
+Add your own tools or rules without losing offline-ness — layer on top:
+```dockerfile
+FROM dfir-aio:v2
+# example: add your own YARA rules so they're baked in
+COPY my-rules/ /opt/my-yara/
+RUN find /opt/my-yara -name '*.yar' -printf 'include "%p"\n' > /opt/my-yara/index.yar
+```
+```bash
+docker build -t dfir-aio:custom .
+```
+Bundle any rule/signature set the same way (copy it in at build time) so the tool never needs the internet at runtime.
+
+<a name="versions"></a>
+## Versions
+- **`dfir-aio` / `dfir-aio:v1`** — core kit (Chainsaw, Hayabusa, EZ Tools, Volatility+symbols, Sleuth Kit, YARA, AppCompatProcessor).
+- **`dfir-aio:v2`** *(recommended)* — everything in v1 **plus** capa(+rules), FLOSS, RegRipper, regipy, Didier Stevens suite, exiftool, Neo23x0 YARA.
+Both are published as GitHub releases; v1 stays available.
 
 <a name="inventory"></a>
 ## What's bundled (inventory)

@@ -1,84 +1,214 @@
-# DFIR-AIO — All-in-One Digital Forensics & Incident Response Toolbox
+# DFIR-AIO — All-in-One Offline Digital Forensics & Incident Response Toolbox
 
-A single Docker container with the core DFIR toolkit pre-installed and **fully offline**. Drop your evidence in a folder, run the container, and every tool is there. No installs, no internet needed after download.
+One Docker container with the full DFIR toolkit pre-installed and **100% offline** — every rule set, signature, and memory-symbol pack is baked in, so no tool ever reaches out to the internet to work on your evidence.
 
 ---
 
 ## Quick start
 
-**Option A — public release (no login):**
-1. Download all 7 `dfir-aio.part.*` files from the [latest release](../../releases/tag/dfir-aio-v1).
-2. Reassemble + load:
-   ```bash
-   cat dfir-aio.part.* > dfir-aio.tar.gz
-   docker load < dfir-aio.tar.gz
-   ```
-3. Run it, mounting your evidence folder to `/data`:
-   ```bash
-   docker run -it --rm -v "$PWD":/data dfir-aio
-   ```
-4. Inside the container, type **`dfir`** to print the tool menu. Your evidence is at `/data`.
-
-**Option B — one-line pull (if the GHCR package is set public):**
 ```bash
-docker pull ghcr.io/zepedara/dfir-aio:latest
-docker run -it --rm -v "$PWD":/data ghcr.io/zepedara/dfir-aio
+# 1. Download all parts from the latest release, reassemble, load:
+cat dfir-aio.part.* > dfir-aio.tar.gz
+docker load < dfir-aio.tar.gz
+
+# 2. cd into the folder holding your evidence, then:
+docker run -it --rm -v "$PWD":/data dfir-aio      # your evidence is now at /data
+```
+Inside, type **`dfir`** to reprint the tool menu. Send tool output to `/data` so you can read it on your host.
+
+> **Mental model:** `/data` is a shared folder between your machine and the container. Evidence in → reports out. Nothing leaves your network.
+
+---
+
+# Tool reference (in depth)
+
+Each section: **what it is → what evidence it eats → how to run it.**
+
+---
+
+## 1. Windows Event Logs
+
+### `chainsaw` — Sigma-rule threat hunting over event logs
+Rapidly searches Windows `.evtx` logs (and MFT, SRUM, etc.) for attacker behavior using **Sigma** detection rules (4,200+ bundled). Best first pass on a box: "what malicious things fired in the logs?"
+```bash
+# Hunt all event logs in /data with the full bundled Sigma set:
+chainsaw hunt /data -s /opt/chainsaw/sigma \
+  --mapping /opt/chainsaw/repo/mappings/sigma-event-logs-all.yml --csv --output /data/chainsaw_out
+# Quick keyword search across logs:
+chainsaw search "mimikatz" -i /data
+# Dump a single log to readable CSV:
+chainsaw dump /data/Security.evtx --csv
 ```
 
-> **The `/data` mount is the bridge:** whatever folder you mount shows up as `/data` inside. Put evidence in, write CSV/JSON output there, review it on your own machine.
+### `hayabusa` — fast event-log timeline + detections
+Builds a single sortable **timeline** of notable events across all `.evtx`, scored by severity (uses its own Sigma-based 4,900+ rule set). Great for "give me one chronological story of this host."
+```bash
+hayabusa csv-timeline -d /data -o /data/hayabusa_timeline.csv     # all logs in /data
+hayabusa csv-timeline -f /data/Security.evtx -o /data/sec.csv     # one file
+hayabusa metrics -d /data                                         # event-id frequency overview
+```
+
+### `EvtxECmd` — clean EVTX → CSV/JSON parser
+Converts raw `.evtx` into normalized CSV/JSON with event maps (human-readable fields). Use when you want the *raw* events, not detections.
+```bash
+EvtxECmd -d /data --csv /data --csvf events.csv     # whole folder
+EvtxECmd -f /data/System.evtx --json /data          # one file to JSON
+```
 
 ---
 
-## What's inside — by investigation type
+## 2. Program Execution — "what ran on this machine"
 
-### 🪟 Windows Event Logs — find attacker activity in `.evtx`
-| Tool | What it does | Example |
-|---|---|---|
-| **chainsaw** | Hunt event logs with **Sigma** detection rules | `chainsaw hunt /data -s /opt/chainsaw/sigma --mapping /opt/chainsaw/repo/mappings/sigma-event-logs-all.yml` |
-| **hayabusa** | Fast event-log **timeline** + threat detection | `hayabusa csv-timeline -d /data -o /data/hayabusa.csv` |
-| **EvtxECmd** | Parse `.evtx` → clean CSV/JSON | `EvtxECmd -d /data --csv /data` |
+### `AmcacheParser` — Amcache.hve
+`Amcache.hve` records programs that have existed/run, with SHA1 hashes and timestamps — gold for finding malware that ran even if deleted.
+```bash
+AmcacheParser -f /data/Amcache.hve --csv /data --csvf amcache.csv -i
+```
 
-### ▶️ Program Execution — what ran on the system
-| Tool | What it does | Example |
-|---|---|---|
-| **AmcacheParser** | `Amcache.hve` — installed/executed programs | `AmcacheParser -f Amcache.hve --csv /data` |
-| **AppCompatCacheParser** | ShimCache — execution evidence | `AppCompatCacheParser -f SYSTEM --csv /data` |
-| **PECmd** | Prefetch (`.pf`) — what ran, when, how often | `PECmd -d /data --csv /data` |
-| **AppCompatProcessor** | Correlate Amcache/ShimCache **at scale** | `python2 /opt/appcompatprocessor/AppCompatProcessor.py <db>` |
+### `AppCompatCacheParser` — ShimCache
+ShimCache (in the `SYSTEM` hive) lists executables the OS saw, with paths and last-modified times — execution/presence evidence.
+```bash
+AppCompatCacheParser -f /data/SYSTEM --csv /data --csvf shimcache.csv
+```
 
-### 💽 File System & Disk
-| Tool | What it does | Example |
-|---|---|---|
-| **MFTECmd** | Parse NTFS `$MFT` — every file's metadata + timestamps | `MFTECmd -f '$MFT' --csv /data` |
-| **Sleuth Kit** | Disk image forensics + file recovery | `mmls image.dd` · `fls` · `icat` · `tsk_recover` |
+### `PECmd` — Prefetch (`.pf`)
+Prefetch shows **what ran, when, how many times, and from where** (Windows client OS). One of the cleanest execution artifacts.
+```bash
+PECmd -d /data --csv /data --csvf prefetch.csv       # all .pf in /data
+PECmd -f /data/CMD.EXE-12345678.pf                   # single file, console view
+```
 
-### 🗂️ Registry & User Activity
-| Tool | Artifact |
-|---|---|
-| **RECmd** | Registry hives (run keys, persistence, config) |
-| **SBECmd** | ShellBags — folders the user browsed |
-| **RBCmd** | Recycle Bin — deleted files |
-| **LECmd** / **JLECmd** | LNK shortcuts / Jump Lists — recently opened files |
-| **SrumECmd** | SRUM — per-app network + resource usage |
-| **WxTCmd** | Windows Timeline activity |
-
-### 🧠 Memory Forensics
-| Tool | What it does | Example |
-|---|---|---|
-| **vol** (Volatility 3) | Analyze RAM dumps (processes, network, injected code) | `vol -f memdump.raw windows.info` → then `windows.pslist`, `windows.netscan`, `windows.malfind` |
-
-### 🦠 Malware / Strings
-| Tool | What it does | Example |
-|---|---|---|
-| **yara** | Pattern-scan files for malware signatures | `yara -r /opt/yara-rules/index.yar /data` |
-| **bstrings** | Smart string extraction | `bstrings -f file.bin` |
+### `appcompat` (AppCompatProcessor) — correlate execution at scale
+Ingests Amcache/ShimCache from **many hosts** into a DB and runs anomaly/stacking modules (find the one weird binary across a fleet).
+```bash
+python2 /opt/appcompatprocessor/AppCompatProcessor.py mycase.db --load /data/hosts/
+python2 /opt/appcompatprocessor/AppCompatProcessor.py mycase.db stomp     # timestomping check
+```
 
 ---
 
-## Typical workflow
-1. Collect evidence (EVTX logs, `$MFT`, `Amcache.hve`, a memory dump, a disk image, registry hives…) into one folder.
-2. `cd` into that folder and run: `docker run -it --rm -v "$PWD":/data dfir-aio`
-3. Pick the tool for your evidence type (tables above), send output CSVs to `/data`.
-4. Open the CSVs on your host (Timeline Explorer, Excel, etc.).
+## 3. Filesystem & Disk
 
-Everything is offline and self-contained. Type **`dfir`** anytime inside the container to reprint the menu.
+### `MFTECmd` — NTFS `$MFT`, `$J`, `$LogFile`
+Parses the Master File Table: **every file's** name, size, and the 8 MAC timestamps (incl. `$STANDARD_INFO` vs `$FILE_NAME` to spot timestomping).
+```bash
+MFTECmd -f '/data/$MFT' --csv /data --csvf mft.csv
+MFTECmd -f '/data/$J'   --csv /data --csvf usnjrnl.csv     # USN journal = file create/delete history
+```
+
+### Sleuth Kit — `mmls` / `fls` / `icat` / `tsk_recover`
+Raw disk-image forensics and **file recovery**.
+```bash
+mmls /data/disk.dd                       # list partitions + offsets
+fls -r -o 2048 /data/disk.dd             # recursive file listing (offset from mmls)
+icat -o 2048 /data/disk.dd 12345 > out   # extract file by inode
+tsk_recover -e -o 2048 /data/disk.dd /data/recovered   # recover ALL files (incl deleted)
+```
+
+### `bulk_extractor` — feature carving
+Scans an image/file for emails, URLs, credit cards, PII, network packets — no filesystem needed.
+```bash
+bulk_extractor -o /data/bulk_out /data/disk.dd
+```
+
+---
+
+## 4. Registry & User Activity
+
+### `regripper` — RegRipper 3.0 (plugins bundled, offline)
+Runs targeted plugins against a registry hive to pull persistence, USB history, network configs, user accounts, etc.
+```bash
+regripper -r /data/SYSTEM   -f system   > /data/system.txt
+regripper -r /data/NTUSER.DAT -f ntuser > /data/ntuser.txt
+regripper -r /data/SOFTWARE -p runkeys             # single plugin
+```
+
+### `RECmd` — Eric Zimmerman's registry engine (batch)
+Power-user registry parsing with batch files (e.g., pull dozens of forensic keys at once).
+```bash
+RECmd --d /data --bn /opt/eztools/RECmd/BatchExamples/Kroll_Batch.reb --csv /data
+```
+
+### Other EZ artifact parsers (each is a command)
+- **`SBECmd`** — ShellBags (folders a user browsed, even deleted): `SBECmd -d /data --csv /data`
+- **`RBCmd`** — Recycle Bin (`$I` files): `RBCmd -d /data --csv /data`
+- **`LECmd`** — LNK shortcuts (recently opened files, with origin volume): `LECmd -d /data --csv /data`
+- **`JLECmd`** — Jump Lists (per-app recent items): `JLECmd -d /data --csv /data`
+- **`SrumECmd`** — SRUM DB (per-app network bytes + runtime, last ~30 days): `SrumECmd -f /data/SRUDB.dat -r /data/SOFTWARE --csv /data`
+- **`WxTCmd`** — Windows Timeline activity DB: `WxTCmd -f /data/ActivitiesCache.db --csv /data`
+- **`bstrings`** — forensic string search with regex presets: `bstrings -f /data/file.bin --ls "password"`
+
+---
+
+## 5. Memory Forensics — Volatility 3 (`vol`)
+
+Analyzes RAM dumps. **Windows/Mac/Linux symbol packs are baked in (~900MB)** so it identifies the kernel and runs offline on any standard dump.
+```bash
+vol -f /data/mem.raw windows.info                 # identify OS/build first
+vol -f /data/mem.raw windows.pslist               # processes
+vol -f /data/mem.raw windows.pstree               # parent/child tree
+vol -f /data/mem.raw windows.netscan              # network connections
+vol -f /data/mem.raw windows.malfind              # injected/hidden code
+vol -f /data/mem.raw windows.cmdline              # process command lines
+vol -f /data/mem.raw windows.dumpfiles --pid 1234 # carve a process's files
+vol -f /data/mem.raw windows.hashdump             # local account hashes
+```
+(Swap `windows.` for `linux.` / `mac.` for those dumps.)
+
+---
+
+## 6. Malware, Documents & Metadata
+
+### `capa-offline` — capability detection (rules bundled)
+Tells you **what a binary can do** (e.g., "encrypt data", "create service", "inject process") by matching Mandiant capa rules — no execution, no internet.
+```bash
+capa-offline /data/suspicious.exe
+capa-offline -v /data/sample.dll        # verbose: which rules + addresses
+```
+
+### `floss` — deobfuscated strings
+Like `strings`, but also extracts **stacked/encoded/obfuscated** strings malware hides (C2 domains, keys).
+```bash
+floss /data/sample.exe > /data/floss.txt
+```
+
+### `yara` — signature scanning (two rule sets bundled)
+```bash
+yara -r /opt/yara-rules/index.yar /data                 # Yara-Rules community set
+yara -r /opt/yara-signature-base/index.yar /data        # Neo23x0 signature-base (broader)
+yara -r /opt/yara-signature-base/index.yar -s /data/sample.exe   # -s = show matching strings
+```
+
+### Didier Stevens suite — malicious documents
+- **`oledump`** — analyze OLE/Office docs, dump macros: `oledump /data/invoice.doc` then `oledump -s A4 -v /data/invoice.doc`
+- **`pdfid`** — quick PDF risk triage (JS, OpenAction…): `pdfid /data/file.pdf`
+- **`pdf-parser`** — dig into PDF objects/streams: `pdf-parser -a /data/file.pdf`
+- **`emldump`** — analyze `.eml` email files
+- **`zipdump`** / **`base64dump`** — inspect archives / decode embedded blobs
+
+### `exiftool` — file metadata
+Author, timestamps, GPS, software, embedded data for images/docs/media.
+```bash
+exiftool /data/photo.jpg
+exiftool -r -csv /data/images/ > /data/meta.csv
+```
+
+---
+
+## Typical investigation flows
+
+**"I have a triage collection (KAPE output) of a Windows host":**
+`chainsaw hunt` + `hayabusa csv-timeline` for the story → `PECmd`/`AmcacheParser`/`AppCompatCacheParser` for execution → `regripper`/`RECmd` for persistence → `MFTECmd` for the file timeline.
+
+**"I have a memory dump":**
+`vol windows.info` → `windows.pstree` / `windows.netscan` / `windows.malfind` / `windows.cmdline` → `windows.dumpfiles` to carve, then `capa-offline`/`floss`/`yara` on the carved binary.
+
+**"I have a suspicious file/doc":**
+`exiftool` + `capa-offline` + `floss` + `yara`; for Office/PDF use `oledump`/`pdfid`/`pdf-parser`.
+
+**"I have a full disk image":**
+`mmls` → `fls`/`tsk_recover` to recover files → `bulk_extractor` for PII/IOCs → mount artifacts and run the Windows tools above.
+
+---
+
+*Everything is offline and self-contained. `dfir` reprints this menu inside the container. Reports go to `/data`.*

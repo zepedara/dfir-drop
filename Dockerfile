@@ -16,6 +16,11 @@
 # image — whose own Python 2 is compiled WITHOUT OpenSSL (so hashlib.md5 works).
 FROM python:2.7-slim AS py2deps
 RUN pip install --no-cache-dir --target=/pkgs python-registry termcolor enum34
+# v3: pre-fetch (download only, no compile) the AppCompatProcessor extra py2
+# deps. Compiled against the from-source Python 2.7 in the final image.
+RUN pip download --no-cache-dir --no-binary :all: --no-deps -d /sdists \
+        "psutil==5.9.5" "python-Levenshtein==0.12.2" \
+    && pip download --no-cache-dir --no-deps -d /sdists "wheel==0.37.1"
 
 FROM debian:12-slim
 
@@ -147,6 +152,22 @@ RUN bash /build/make-wrappers.sh && chmod +x /opt/tools/bin/dfir \
 # Friendly banner + clean build dir
 COPY scripts/banner.txt /etc/dfir-banner
 RUN rm -rf /build && echo 'cat /etc/dfir-banner 2>/dev/null' >> /root/.bashrc
+
+# ---------------------------------------------------------------------------
+# 10. [v3] AppCompatProcessor extra Python2 deps: psutil + python-Levenshtein.
+#     Compiled against the from-source Python 2.7 (sdists from the py2deps
+#     stage). Silences ACP's "psutil/Levenshtein module required" warnings.
+# ---------------------------------------------------------------------------
+COPY --from=py2deps /sdists /opt/py2-sdists
+COPY scripts/install-py2-extras.sh /build/install-py2-extras.sh
+RUN bash /build/install-py2-extras.sh
+
+# ---------------------------------------------------------------------------
+# 11. [v3] Plaso / log2timeline super-timeline engine (isolated venv).
+#     Adds log2timeline.py / psort.py / pinfo.py to PATH.  [baked, offline]
+# ---------------------------------------------------------------------------
+COPY scripts/install-plaso.sh /build/install-plaso.sh
+RUN bash /build/install-plaso.sh && rm -rf /build
 
 WORKDIR /data
 CMD ["/bin/bash"]

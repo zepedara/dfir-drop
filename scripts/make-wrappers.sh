@@ -33,10 +33,22 @@ done
 # --- AppCompatProcessor: bundled Python2 + pyregf + python-registry --------
 # Fully functional ShimCache/Amcache stacking (module-04). The Python2 build,
 # pyregf bindings and pure-python deps (/opt/py2-site) are baked by
-# install-appcompatprocessor.sh.
+# install-python2.sh / install-libregf.sh; psutil + python-Levenshtein by
+# install-py2-extras.sh.  Exposed as appcompat / appcompatprocessor / acp.
 w appcompat '#!/usr/bin/env bash' \
   'export PYTHONPATH=/opt/py2-site${PYTHONPATH:+:$PYTHONPATH}' \
   'exec /usr/local/bin/python2.7 /opt/appcompatprocessor/AppCompatProcessor.py "$@"'
+ln -sf "$BIN/appcompat" "$BIN/appcompatprocessor"
+ln -sf "$BIN/appcompat" "$BIN/acp"
+
+# --- yara-scan: scan a path with the baked Neo23x0 signature-base rules ----
+# Default rule set = signature-base index (override with $YARA_RULES, e.g.
+# /opt/yara-rules/index.yar for the Yara-Rules community set). Externals are
+# pre-defined so signature-base rules that reference them compile cleanly.
+w yara-scan '#!/usr/bin/env bash' \
+  '# yara-scan [yara-opts] <file|dir>  — recursive scan with bundled rules' \
+  'RULES="${YARA_RULES:-/opt/yara-signature-base/index.yar}"' \
+  'exec yara -r -w -d filename=x -d filepath=x -d extension=x -d filetype=x -d md5=x -d owner=x "$RULES" "$@"'
 
 # --- vol: ensure venv volatility on PATH (already linked, add alias) -------
 ln -sf /opt/venv/bin/vol "$BIN/vol" 2>/dev/null || true

@@ -1,0 +1,3 @@
+
+  DFIR-AIO offline forensics toolbox  —  type `dfir` for the menu.
+  Evidence is mounted at /data.  Reports go to /data.

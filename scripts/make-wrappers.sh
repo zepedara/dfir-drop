@@ -30,17 +30,13 @@ for t in oledump pdfid pdf-parser emldump zipdump base64dump; do
     "exec /opt/venv/bin/python \"$src\" \"\$@\""
 done
 
-# --- AppCompatProcessor: needs python2 (not in Debian 12) -----------------
-# Provide a wrapper that uses python2 if the user layers it in; otherwise it
-# explains the limitation. Source is baked at /opt/appcompatprocessor.
+# --- AppCompatProcessor: bundled Python2 + pyregf + python-registry --------
+# Fully functional ShimCache/Amcache stacking (module-04). The Python2 build,
+# pyregf bindings and pure-python deps (/opt/py2-site) are baked by
+# install-appcompatprocessor.sh.
 w appcompat '#!/usr/bin/env bash' \
-  'if command -v python2 >/dev/null 2>&1; then' \
-  '  exec python2 /opt/appcompatprocessor/AppCompatProcessor.py "$@"' \
-  'else' \
-  '  echo "AppCompatProcessor source is baked at /opt/appcompatprocessor but" >&2' \
-  '  echo "requires a Python2 interpreter (removed from Debian 12). See report." >&2' \
-  '  exit 2' \
-  'fi'
+  'export PYTHONPATH=/opt/py2-site${PYTHONPATH:+:$PYTHONPATH}' \
+  'exec /usr/local/bin/python2.7 /opt/appcompatprocessor/AppCompatProcessor.py "$@"'
 
 # --- vol: ensure venv volatility on PATH (already linked, add alias) -------
 ln -sf /opt/venv/bin/vol "$BIN/vol" 2>/dev/null || true

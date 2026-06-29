@@ -9,6 +9,14 @@
 # Layer order: stable/heavy layers (OS, .NET, pip, ~900MB Vol symbols) first;
 # tools + rule packs + wrappers (more likely to be re-tweaked) last, so a
 # rebuild after editing a wrapper does not re-pull the symbol packs.
+
+# --- Stage: pure-python Python2 deps for AppCompatProcessor ----------------
+# python:2.7-slim still has a working pip/TLS, so we resolve the Py2 deps here
+# (python-registry pulls enum34) and copy the pure-python result into the final
+# image — whose own Python 2 is compiled WITHOUT OpenSSL (so hashlib.md5 works).
+FROM python:2.7-slim AS py2deps
+RUN pip install --no-cache-dir --target=/pkgs python-registry termcolor enum34
+
 FROM debian:12-slim
 
 LABEL org.opencontainers.image.title="dfir-aio" \
@@ -115,6 +123,18 @@ RUN bash /build/install-eztools.sh
 COPY scripts/get-rules.sh /build/get-rules.sh
 COPY scripts/build-yara-index.py /build/build-yara-index.py
 RUN bash /build/get-rules.sh
+
+# ---------------------------------------------------------------------------
+# 8b. AppCompatProcessor — functional Python2 runtime (ShimCache/Amcache
+#     stacking, module-04). Compiles Python 2.7 without OpenSSL (working md5)
+#     and builds libregf's pyregf bindings; pure-python deps come from the
+#     py2deps stage. ACP source itself was cloned by get-rules.sh.
+# ---------------------------------------------------------------------------
+COPY --from=py2deps /pkgs /opt/py2-site
+COPY scripts/install-python2.sh /build/install-python2.sh
+RUN bash /build/install-python2.sh
+COPY scripts/install-libregf.sh /build/install-libregf.sh
+RUN bash /build/install-libregf.sh
 
 # ---------------------------------------------------------------------------
 # 9. Command wrappers (prefetch, regripper, capa-offline, didier suite, dfir)

@@ -53,9 +53,10 @@ Pull the network cable after `docker load` — everything still works.
 
 **Option A — public release (no login, works on locked-down networks):**
 ```bash
-# Download all dfir-aio.part.* files from the latest release, then:
-cat dfir-aio.part.* > dfir-aio.tar.gz
-docker load < dfir-aio.tar.gz          # imports the image
+# Download dfir-aio-v4.tar.gz + SHA256SUMS.txt from the latest release:
+# https://github.com/zepedara/dfir-drop/releases/latest
+sha256sum -c SHA256SUMS.txt             # optional integrity check
+docker load -i dfir-aio-v4.tar.gz       # imports the image (docker reads the gzip directly)
 docker images | grep dfir-aio          # verify it loaded
 ```
 
@@ -74,12 +75,12 @@ Flags explained: `-it` interactive shell · `--rm` auto-clean the container on e
 
 **Run a single tool without entering the shell** (handy for scripting/automation) — append the command after the image name:
 ```bash
-docker run --rm -v "$PWD":/data dfir-aio:v2 PECmd -d /data --csv /data
-docker run --rm -v "$PWD":/data dfir-aio:v2 vol -f /data/mem.raw windows.pslist
+docker run --rm -v "$PWD":/data dfir-aio:v4 PECmd -d /data --csv /data
+docker run --rm -v "$PWD":/data dfir-aio:v4 vol -f /data/mem.raw windows.pslist
 ```
 **Fully air-gapped run** — prove no network is used: add `--network none`:
 ```bash
-docker run --rm --network none -v "$PWD":/data dfir-aio:v2 capa-offline /data/sample.exe
+docker run --rm --network none -v "$PWD":/data dfir-aio:v4 capa-offline /data/sample.exe
 ```
 
 ---
@@ -358,7 +359,7 @@ This container **analyzes** files; it does **not** sandbox **execution**. Do **n
 ## Extending / rebuilding the image
 Add your own tools or rules without losing offline-ness — layer on top:
 ```dockerfile
-FROM dfir-aio:v2
+FROM dfir-aio:v4
 # example: add your own YARA rules so they're baked in
 COPY my-rules/ /opt/my-yara/
 RUN find /opt/my-yara -name '*.yar' -printf 'include "%p"\n' > /opt/my-yara/index.yar
@@ -371,7 +372,7 @@ Bundle any rule/signature set the same way (copy it in at build time) so the too
 <a name="versions"></a>
 ## Versions
 - **`dfir-aio` / `dfir-aio:v1`** — core kit (Chainsaw, Hayabusa, EZ Tools, Volatility+symbols, Sleuth Kit, YARA, AppCompatProcessor).
-- **`dfir-aio:v2`** *(recommended)* — everything in v1 **plus** capa(+rules), FLOSS, RegRipper, regipy, Didier Stevens suite, exiftool, Neo23x0 YARA.
+- **`dfir-aio:v4`** *(recommended)* — everything in v1 **plus** capa(+rules), FLOSS, RegRipper, regipy, Didier Stevens suite, exiftool, Neo23x0 YARA.
 Both are published as GitHub releases; v1 stays available.
 
 <a name="inventory"></a>
